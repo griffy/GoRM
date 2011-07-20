@@ -2,7 +2,7 @@ package gorm
 
 import (
 	"os"
-	"sdegutis/sqlite"
+	"github.com/sdegutis/sqlite-go-wrapper"
 	"fmt"
 	"strings"
 	// "log"
@@ -106,10 +106,10 @@ func (c *Conn) Save(rowStruct interface{}) os.Error {
 			return nil
 		}
 
-		structPtr := reflect.NewValue(rowStruct).(*reflect.PtrValue)
-		structVal := structPtr.Elem().(*reflect.StructValue)
+		structPtr := reflect.ValueOf(rowStruct)
+		structVal := structPtr.Elem()
 		structField := structVal.FieldByName("Id")
-		structField.SetValue(reflect.NewValue(id))
+		structField.Set(reflect.ValueOf(id))
 
 		return nil
 	}
@@ -162,12 +162,12 @@ func (c *Conn) Get(rowStruct interface{}, condition interface{}, args ...interfa
 }
 
 func (c *Conn) GetAll(rowsSlicePtr interface{}, condition string, args ...interface{}) os.Error {
-	sliceValue, ok := reflect.Indirect(reflect.NewValue(rowsSlicePtr)).(*reflect.SliceValue)
-	if !ok {
+	sliceValue := reflect.Indirect(reflect.ValueOf(rowsSlicePtr))
+	if sliceValue.Kind() != reflect.Slice {
 		return os.NewError("needs a pointer to a slice")
 	}
 
-	sliceElementType := sliceValue.Type().(*reflect.SliceType).Elem()
+	sliceElementType := sliceValue.Type().Elem()
 
 	condition = strings.TrimSpace(condition)
 	if len(condition) > 0 {
@@ -178,11 +178,16 @@ func (c *Conn) GetAll(rowsSlicePtr interface{}, condition string, args ...interf
 	if err != nil {
 		return err
 	}
+	
+	var a int; println(reflect.ValueOf(a).CanAddr())
+	println(reflect.Zero(reflect.TypeOf(a)).CanAddr())
+	println(reflect.Zero(reflect.TypeOf(42)).Addr().String())
 
 	for _, results := range resultsSlice {
-		newValue := reflect.MakeZero(sliceElementType)
+		newValue := reflect.Zero(sliceElementType)
+		println("newValue = ", sliceElementType.String())
 		scanMapIntoStruct(newValue.Addr().Interface(), results)
-		sliceValue.SetValue(reflect.Append(sliceValue, newValue))
+		sliceValue.Set(reflect.Append(sliceValue, newValue))
 	}
 
 	return nil
