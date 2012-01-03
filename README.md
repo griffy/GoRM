@@ -78,7 +78,7 @@ Saving new and existing objects
 	newGuy.Name = "that new guy"
 	newGuy.Age = 27
 	
-	db.Save(&newGuy)
+	session.Save(&newGuy)
 	// newGuy.Id is suddenly valid, and he's in the database now.
 
 ### Installing GoRM
