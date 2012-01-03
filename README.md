@@ -6,52 +6,70 @@ GoRM is an ORM for Go. It lets you map Go `struct`s to tables in a database. It'
 
 Open a database
 
-	db, _ := OpenDB("test.db")
-	db.Close() // you'll probably wanna close it at some point
+	conn, _ := gorm.NewConnection("sqlite3", "./test.db")
+	conn.Close() // you'll probably wanna close it at some point
 
 Model a struct after a table in the db
 
 	type Person struct {
-		Id int
+		Id int64
 		Name string
-		Age int
+		Age int64
 	}
 
-Create an object and save it
+Create a database session
+
+    session, _ := conn.NewSession()
+
+Create an object
 
 	var someone Person
 	someone.Name = "john"
 	someone.Age = 20
 	
-	db.Save(&someone)
+And save it in two lines
+
+	session.Update(&someone)
+    session.Commit()
+
+Update will either create a new row in your persons table or modify the matching one accordingly. However, the changes will not hit the database until you issue Commit. This is because GoRM is transaction-based.
+
+If you'd rather type one line than two, you can do
+
+    session.Save(&someone)
+
+Finally, if you decide to commit and want a new transaction to further modify the database, you can issue
+
+    session.Renew()
 
 Fetch a single object
 
 	var person1 Person
-	db.Get(&person1, "id = ?", 3)
+	session.Get(&person1, "id = ?", 3)
 
 	var person2 Person
-	db.Get(&person2, 3) // this is shorthand for the version above
+	session.Get(&person2, 3) // this is shorthand for the version above
 	
 	var person3 Person
-	db.Get(&person3, "name = ?", "john") // more complex query
+	session.Get(&person3, "name = ?", "john") // more complex query
 	
 	var person4 Person
-	db.Get(&person4, "name = ? and age < ?", "john", 88) // even more complex
+	session.Get(&person4, "name = ? and age < ?", "john", 88) // even more complex
 
 Fetch multiple objects
 
 	var bobs []Person
-	err := db.GetAll(&bobs, "name = ?", "bob")
+	err := session.GetAll(&bobs, "name = ?", "bob")
 
 	var everyone []Person
-	err := db.GetAll(&everyone, "") // use empty string to omit "where" clause
+	err := session.GetAll(&everyone) // omit "where" clause
 
 Saving new and existing objects
 
 	person2.Name = "Jack" // an already-existing person in the database, from the example above
-	db.Save(&person2)
-	
+	session.Save(&person2)
+	session.Renew()
+
 	var newGuy Person
 	newGuy.Name = "that new guy"
 	newGuy.Age = 27
