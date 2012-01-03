@@ -4,7 +4,11 @@ GoRM is an ORM for Go. It lets you map Go `struct`s to tables in a database. It'
 
 ### How do we use it?
 
-Open a database
+To work with a database of your choosing, first import a library that implements exp/sql, like so:
+
+    import _ "github.com/mattn/go-sqlite3"
+
+And open a connection to it
 
 	conn, _ := gorm.NewConnection("sqlite3", "./test.db")
 	conn.Close() // you'll probably wanna close it at some point
@@ -81,11 +85,7 @@ Saving new and existing objects
 
 Obviously [Go](http://golang.org/) should be installed. [The official installation directions](http://golang.org/doc/install.html) are recommended, rather than installing it through a package (such as homebrew).
 
-This package also requires [my version of the `sqlite` package](https://github.com/sdegutis/sqlite-go-wrapper). Clone it, then run `make install` and you'll be all set.
-
 ### Known bugs
-
-Right now, it only interfaces with SQLite. The goal however is to add support for other databases in the future, including maybe PostgreSQL and CouchDB or NoSQL? Who knows.
 
 Also, at the moment, relationship-support is in the works, but not yet implemented.
 
