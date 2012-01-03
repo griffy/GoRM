@@ -1,10 +1,9 @@
 package gorm
 
 import (
+	"errors"
 	"reflect"
 	"strings"
-	"strconv"
-	"os"
 )
 
 func getTypeName(obj interface{}) (typestr string) {
@@ -20,10 +19,11 @@ func getTypeName(obj interface{}) (typestr string) {
 }
 
 func snakeCasedName(name string) string {
-	newstr := make([]int, 0)
+	newstr := make([]uint8, 0)
 	firstTime := true
 
 	for _, chr := range name {
+		chr := int(chr)
 		if isUpper := 'A' <= chr && chr <= 'Z'; isUpper {
 			if firstTime == true {
 				firstTime = false
@@ -32,17 +32,18 @@ func snakeCasedName(name string) string {
 			}
 			chr -= ('A' - 'a')
 		}
-		newstr = append(newstr, chr)
+		newstr = append(newstr, uint8(chr))
 	}
 
 	return string(newstr)
 }
 
 func titleCasedName(name string) string {
-	newstr := make([]int, 0)
+	newstr := make([]uint8, 0)
 	upNextChar := true
 
 	for _, chr := range name {
+		chr := int(chr)
 		switch {
 		case upNextChar:
 			upNextChar = false
@@ -52,7 +53,7 @@ func titleCasedName(name string) string {
 			continue
 		}
 
-		newstr = append(newstr, chr)
+		newstr = append(newstr, uint8(chr))
 	}
 
 	return string(newstr)
@@ -65,10 +66,10 @@ func pluralizeString(str string) string {
 	return str + "s"
 }
 
-func scanMapIntoStruct(obj interface{}, objMap map[string][]byte) os.Error {
+func scanMapIntoStruct(obj interface{}, objMap map[string]interface{}) error {
 	dataStruct := reflect.Indirect(reflect.ValueOf(obj))
 	if dataStruct.Kind() != reflect.Struct {
-		return os.NewError("expected a pointer to a struct")
+		return errors.New("expected a pointer to a struct")
 	}
 
 	for key, data := range objMap {
@@ -80,26 +81,20 @@ func scanMapIntoStruct(obj interface{}, objMap map[string][]byte) os.Error {
 		var v interface{}
 
 		switch structField.Type().Kind() {
+		/* FIXME: slice doesn't exist as a type
 		case reflect.Slice:
-			v = data
+			v = data.(slice)
+		*/
 		case reflect.String:
-			v = string(data)
+			v = data.(string)
 		case reflect.Bool:
-			v = string(data) == "1"
+			v = data.(bool)
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			x, err := strconv.Atoi(string(data))
-			if err != nil {
-				return os.NewError("arg " + key + " as int: " + err.String())
-			}
-			v = x
+			v = data.(int64)
 		case reflect.Float32, reflect.Float64:
-			x, err := strconv.Atof64(string(data))
-			if err != nil {
-				return os.NewError("arg " + key + " as float64: " + err.String())
-			}
-			v = x
+			v = data.(float64)
 		default:
-			return os.NewError("unsupported type in Scan: " + reflect.TypeOf(v).String())
+			return errors.New("unsupported type in Scan: " + reflect.TypeOf(v).String())
 		}
 
 		structField.Set(reflect.ValueOf(v))
@@ -108,10 +103,10 @@ func scanMapIntoStruct(obj interface{}, objMap map[string][]byte) os.Error {
 	return nil
 }
 
-func scanStructIntoMap(obj interface{}) (map[string]interface{}, os.Error) {
+func scanStructIntoMap(obj interface{}) (map[string]interface{}, error) {
 	dataStruct := reflect.Indirect(reflect.ValueOf(obj))
 	if dataStruct.Kind() != reflect.Struct {
-		return nil, os.NewError("expected a pointer to a struct")
+		return nil, errors.New("expected a pointer to a struct")
 	}
 
 	dataStructType := dataStruct.Type()

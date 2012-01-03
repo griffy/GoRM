@@ -1,24 +1,40 @@
 package gorm
 
 import (
-	"os"
+	"errors"
 	"fmt"
 	"strings"
 	"reflect"
 	"exp/sql"
 )
 
+type columnValue struct {
+	Val interface{}
+}
+
+func (c *columnValue) ScanInto(value interface{}) error {
+	// TODO: handle types better
+	switch v := value.(type) {
+	case []byte:
+		// since v is volatile, we must create a copy
+		c.Val = string(v)
+	default:
+		c.Val = v
+	}
+	return nil
+}
+
 type Conn struct {
-	conn *sql.DB
+	DB *sql.DB
 }
 
-func (c *Conn) Close() os.Error {
-	return c.conn.Close()
+func (c *Conn) Close() error {
+	return c.DB.Close()
 }
 
-func NewConnection(driverName, dataSourceName string) (*Conn, os.Error) {
-	conn, err := sql.Open(driverName, dataSourceName)
-	return &Conn{conn: conn}, err
+func NewConnection(driverName, dataSource string) (*Conn, error) {
+	db, err := sql.Open(driverName, dataSource)
+	return &Conn{db}, err
 }
 
 type Session struct {
@@ -26,8 +42,8 @@ type Session struct {
 	*sql.Tx	
 }
 
-func (c *Conn) NewSession() *Session, os.Error {
-	tx, err := c.Begin()
+func (c *Conn) NewSession() (*Session, error) {
+	tx, err := c.DB.Begin()
 	if err != nil {
 		return nil, err
 	}
@@ -35,14 +51,14 @@ func (c *Conn) NewSession() *Session, os.Error {
 }
 
 // This should only be called after a Commit or Rollback
-func (s *Session) Renew() os.Error {
-	// since a session has the lifetime of a transaction,
-	// we must create a new transaction and therefore 
-	// new session and assign it back
-	s, err = s.Conn.NewSession()
+func (s *Session) Renew() error {
+	// since a transaction's life ends after a commit
+	// or rollback, we must create a new one
+	tx, err := s.Conn.DB.Begin()
 	if err != nil {
 		return err
 	}
+	s.Tx = tx
 	return nil
 }
 
@@ -50,11 +66,11 @@ func getTableName(obj interface{}) string {
 	return pluralizeString(snakeCasedName(getTypeName(obj)))
 }
 
-func (s *Session) getResultsForQuery(tableName, args ...interface{}) (results []map[string][]byte, err os.Error) {
-	queryArgs := []interface{}
+func (s *Session) getResultsForQuery(tableName string, args ...interface{}) (results []map[string]interface{}, err error) {
+	queryArgs := []interface{}{}
 	condition := ""
 	if len(args) >= 1 {
-		condition = args[0].type(string)
+		condition, _ = args[0].(string)
 		if len(args) > 1 {
 			queryArgs = args[1:]
 		}
@@ -62,54 +78,51 @@ func (s *Session) getResultsForQuery(tableName, args ...interface{}) (results []
 	query := fmt.Sprintf("select * from %v %v", 
 						 tableName, 
 						 condition)
-	stmt, err := s.Tx.Prepare(query)
+	rows, err := s.Conn.DB.Query(query, queryArgs...)
 	if err != nil {
 		return nil, err
 	}
-
-	rows, err := stmt.Query(queryArgs)
+	columnNames, err := rows.Columns()
 	if err != nil {
 		return nil, err
 	}
-
-	columnNames, err := s.conn.Columns()
-	if err != nil {
-		return nil, err
-	}
-
 	numColumns := len(columnNames)
 	for rows.Next() {
-		// create an array the size of the number of
-		// columns, where each column is a slice of bytes
-		// and return a pointer (slice) to that
-		row := &new([numColumns][]byte)
-		// populate the row array
-		err := rows.Scan(row...)
+		// create a slice the size of the number of
+		// columns
+		row := make([]*columnValue, numColumns)
+		for i := 0; i < numColumns; i++ {
+			row[i] = &columnValue{nil}
+		}
+		// store them in a slice of interfaces to send to scan
+		rowAsInterfaces := make([]interface{}, numColumns)
+		for i, cv := range row {
+			rowAsInterfaces[i] = cv
+		}
+		
+		// populate the row slice
+		err := rows.Scan(rowAsInterfaces...) // ...
 		if err != nil {
 			return nil, err
 		}
+
 		// a result has the column name as the key
 		// and column val as the value
-		result := make(map[string][]byte)
-		// since the slices filled by scan are not values,
-		// they won't be valid after this iteration. So,
-		// we must make copies of the data that are
-		for column, _ := range row {
-			val := new([len(row[column])]byte)
-			for i, b := range row[column] {
-				val[i] = b
-			}
-			// store a slice of the fresh copy
-			// in our result map
-			columnName := columnNames[column]
-			result[columnName] = &val
+		result := make(map[string]interface{})
+		// store each column in the map
+		for columnNum, val := range rowAsInterfaces {
+			cv := val.(*columnValue)
+			// store a copy of the val in the result map
+			columnName := columnNames[columnNum]
+			result[columnName] = cv.Val
 		}
 		results = append(results, result)
 	}
+
 	return results, nil
 }
 
-func (s *Session) insert(tableName string, properties map[string]interface{}) (int64, os.Error) {
+func (s *Session) insert(tableName string, properties map[string]interface{}) (int64, error) {
 	var keys []string
 	var placeholders []string
 	var args []interface{}
@@ -124,7 +137,6 @@ func (s *Session) insert(tableName string, properties map[string]interface{}) (i
 						 tableName,
 						 strings.Join(keys, ", "),
 						 strings.Join(placeholders, ", "))
-
 	res, err := s.Tx.Exec(stmt, args...)
 	if err != nil {
 		return -1, err
@@ -134,15 +146,16 @@ func (s *Session) insert(tableName string, properties map[string]interface{}) (i
 	if err != nil {
 		return -1, err
 	}
+
 	return id, nil
 }
 
-func (s *Session) Update(rowStruct interface{}) os.Error {
+func (s *Session) Update(rowStruct interface{}) error {
 	results, _ := scanStructIntoMap(rowStruct)
 	tableName := getTableName(rowStruct)
 
-	id := results["id"]
-	results["id"] = 0, false
+	id := results["id"].(int64)
+	delete(results, "id")
 
 	if id == 0 {
 		id, err := s.insert(tableName, results)
@@ -170,11 +183,11 @@ func (s *Session) Update(rowStruct interface{}) os.Error {
 						 tableName,
 						 strings.Join(updates, ", "),
 						 id)
-
-	return s.Tx.Exec(stmt, args...)
+	_, err := s.Tx.Exec(stmt, args...)
+	return err
 }
 
-func (s *Session) Save(rowStruct interface{}) os.Error {
+func (s *Session) Save(rowStruct interface{}) error {
 	err := s.Update(rowStruct)
 	if err != nil {
 		return err
@@ -182,64 +195,62 @@ func (s *Session) Save(rowStruct interface{}) os.Error {
 	return s.Tx.Commit()
 }
 
-func (s *Session) Get(rowStruct interface{}, condition interface{}, args ...interface{}) os.Error {
+func (s *Session) Get(rowStruct interface{}, args ...interface{}) error {
 	conditionStr := ""
-
-	switch condition := condition.(type) {
-	case string:
-		conditionStr = condition
+	switch args[0].(type) {
 	case int:
+		// add the condition string to the beginning of the args
+		// slice so the int comes second
 		conditionStr = "id = ?"
-		args = append(args, condition)
+		ci := reflect.ValueOf(conditionStr).Interface()
+		args = append([]interface{}{}, 
+					  append([]interface{}{ci}, args...)...)
 	}
 
-	conditionStr = fmt.Sprintf("where %v", conditionStr)
-
-	resultsSlice, err := s.getResultsForQuery(getTableName(rowStruct), conditionStr, args)
+	// modify the condition so it's part of a where clause
+	args[0] = reflect.ValueOf(fmt.Sprintf("where %v", args[0])).Interface()
+	resultsSlice, err := s.getResultsForQuery(getTableName(rowStruct), args...)
 	if err != nil {
 		return err
 	}
 
 	switch len(resultsSlice) {
 	case 0:
-		return os.NewError("did not find any results")
+		return errors.New("did not find any results")
 	case 1:
 		results := resultsSlice[0]
 		scanMapIntoStruct(rowStruct, results)
 	default:
-		return os.NewError("more than one row matched")
+		return errors.New("more than one row matched")
 	}
 
 	return nil
 }
 
-func (s *Session) GetAll(rowsSlicePtr interface{}, args ...interface{}) os.Error {
+// TODO: test
+func (s *Session) GetAll(rowsSlicePtr interface{}, args ...interface{}) error {
 	sliceValue := reflect.Indirect(reflect.ValueOf(rowsSlicePtr))
 	if sliceValue.Kind() != reflect.Slice {
-		return os.NewError("needs a pointer to a slice")
+		return errors.New("needs a pointer to a slice")
 	}
 
 	sliceElementType := sliceValue.Type().Elem()
 
-	queryArgs := []interface{}
+	queryArgs := []interface{}{}
 	condition := ""
 	if len(args) >= 1 {
-		condition = strings.TrimSpace(args[0].type(string))
+		condition = strings.TrimSpace(args[0].(string))
 		condition = fmt.Sprintf("where %v", condition)
 		if len(args) > 1 {
 			queryArgs = args[1:]
 		}
 	}
 
-	resultsSlice, err := c.getResultsForQuery(getTableName(rowsSlicePtr), condition, queryArgs)
+	resultsSlice, err := s.getResultsForQuery(getTableName(rowsSlicePtr), condition, queryArgs)
 	if err != nil {
 		return err
 	}
-	/*
-	var a int; println(reflect.ValueOf(a).CanAddr())
-	println(reflect.Zero(reflect.TypeOf(a)).CanAddr())
-	println(reflect.Zero(reflect.TypeOf(42)).Addr().String())
-	*/
+
 	for _, results := range resultsSlice {
 		newValue := reflect.Zero(sliceElementType)
 		//println("newValue = ", sliceElementType.String())
